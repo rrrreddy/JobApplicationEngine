@@ -1,18 +1,24 @@
-"""Telethon client that watches your job channels and runs each new post
-through the pipeline. Uses your own Telegram account (not a bot) so it can
-read channels/groups you're a member of, admin or not.
+"""Telethon client that periodically checks your job channels and runs
+each new post through the pipeline. Uses your own Telegram account (not a
+bot) so it can read channels/groups you're a member of, admin or not.
 
 On first run this will prompt for your phone number + login code in the
 terminal, then save a .session file so you won't be asked again.
+
+Watching is poll-based rather than a live event stream: every
+POLL_INTERVAL_SECONDS (default 30 min) it checks each channel for
+messages newer than the last time that channel was checked, independent
+of Telegram's read/unread state. A manual /refresh in the bot wakes the
+loop early via `refresh_event` for an on-demand check.
 """
 import asyncio
 import datetime as dt
 import logging
 from typing import Awaitable, Callable
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 
-from app import pipeline
+from app import db, pipeline
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -90,10 +96,11 @@ async def _process_and_notify(channel_label: str, message_id: int, text: str, on
 
 async def run_backfill(client: TelegramClient, days: int, on_pending: OnPending, delay_seconds: float = 1.5):
     """Fetches and screens messages from the last `days` days in each
-    watched channel. Safe to re-run or overlap with live watching: the
-    pipeline's content-hash dedup means a message already seen (whether
-    live or from a previous backfill) is skipped automatically, so this
-    never double-processes or double-sends anything.
+    watched channel, regardless of each channel's poll bookkeeping. Safe
+    to re-run or overlap with the poll loop: the pipeline's content-hash
+    dedup means a message already seen and resolved is skipped
+    automatically, so this never double-processes or double-sends
+    anything (a previously *failed* one is retried, which is intentional).
 
     `delay_seconds` paces requests between messages to stay well under
     Telegram's and Groq's rate limits during a large catch-up run.
@@ -122,28 +129,68 @@ async def run_backfill(client: TelegramClient, days: int, on_pending: OnPending,
             await asyncio.sleep(delay_seconds)
 
 
-async def run_listener(client: TelegramClient, on_pending: OnPending):
-    if not settings.job_channels:
-        logger.warning("No TELEGRAM_JOB_CHANNELS configured; listener has nothing to watch.")
-        await client.run_until_disconnected()
-        return
+async def _check_channel_once(
+    client: TelegramClient, identifier: str, entity, on_pending: OnPending, seed_days: int
+):
+    """Processes messages newer than this channel's last recorded check.
+    On a channel's very first ever check, seeds the starting point `seed_days`
+    back (0 = only messages from this point forward)."""
+    last_checked = db.get_channel_last_checked(identifier)
+    now = dt.datetime.now(dt.timezone.utc)
+    if last_checked is None:
+        cutoff = now - dt.timedelta(days=seed_days) if seed_days > 0 else now
+    else:
+        cutoff = dt.datetime.fromtimestamp(last_checked, tz=dt.timezone.utc)
 
+    channel_label = getattr(entity, "username", None) or getattr(entity, "title", None) or identifier
+    messages = []
+    async for message in client.iter_messages(entity):
+        if not message.date or message.date <= cutoff:
+            break
+        if message.raw_text and message.raw_text.strip():
+            messages.append(message)
+
+    if messages:
+        logger.info("Found %d new message(s) in %s since last check", len(messages), channel_label)
+    for message in reversed(messages):  # oldest first
+        await _process_and_notify(channel_label, message.id, message.raw_text, on_pending)
+
+    db.set_channel_last_checked(identifier, now.timestamp())
+
+
+async def run_poll_loop(
+    client: TelegramClient,
+    on_pending: OnPending,
+    interval_seconds: int,
+    refresh_event: asyncio.Event,
+    seed_days: int = 0,
+):
+    """Runs forever: checks every watched channel for new messages, then
+    waits either `interval_seconds` or until `refresh_event` is set
+    (e.g. by the bot's /refresh command) for an immediate re-check.
+    """
     resolved = await resolve_channels(client, settings.job_channels)
-    entities = list(resolved.values())
-    if not entities:
+    if not resolved:
         logger.error(
-            "None of the configured TELEGRAM_JOB_CHANNELS could be resolved -- the listener "
-            "will not watch anything until this is fixed."
+            "None of the configured TELEGRAM_JOB_CHANNELS could be resolved -- "
+            "nothing will be watched until this is fixed."
         )
 
-    @client.on(events.NewMessage(chats=entities))
-    async def handler(event):
-        text = event.raw_text or ""
-        if not text.strip():
-            return
-        chat = await event.get_chat()
-        channel_label = getattr(chat, "username", None) or getattr(chat, "title", None) or str(event.chat_id)
-        await _process_and_notify(channel_label, event.id, text, on_pending)
+    logger.info(
+        "Polling %d channel(s) every %d seconds (manual /refresh also supported)",
+        len(resolved), interval_seconds,
+    )
 
-    logger.info("Telethon listener started, watching: %s", list(resolved.keys()))
-    await client.run_until_disconnected()
+    while True:
+        for identifier, entity in resolved.items():
+            try:
+                await _check_channel_once(client, identifier, entity, on_pending, seed_days)
+            except Exception:
+                logger.exception("Error checking channel %s", identifier)
+
+        refresh_event.clear()
+        try:
+            await asyncio.wait_for(refresh_event.wait(), timeout=interval_seconds)
+            logger.info("Manual refresh triggered, checking again now")
+        except asyncio.TimeoutError:
+            pass

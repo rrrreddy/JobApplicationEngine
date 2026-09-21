@@ -134,17 +134,32 @@ def recruiter_already_contacted(email: str) -> bool:
 
 
 def create_job(channel: str, message_id: int, raw_text: str) -> int | None:
+    """Returns a job id to process, or None if this exact post has already
+    been seen and resolved. A post that previously ended in 'failed' (e.g.
+    a transient LLM/API error) is reset and returned for retry rather than
+    being treated as a permanent duplicate."""
     chash = content_hash(raw_text)
     with get_conn() as conn:
-        try:
-            cur = conn.execute(
-                "INSERT INTO jobs (channel, message_id, content_hash, raw_text, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (channel, message_id, chash, raw_text, time.time()),
-            )
-            return cur.lastrowid
-        except sqlite3.IntegrityError:
-            return None  # already seen this exact post
+        existing = conn.execute(
+            "SELECT id, status FROM jobs WHERE content_hash = ?", (chash,)
+        ).fetchone()
+        if existing is not None:
+            if existing["status"] == "failed":
+                conn.execute(
+                    "UPDATE jobs SET status = 'pending', is_fit = NULL, fit_reason = NULL, "
+                    "recruiter_email = NULL, draft_subject = NULL, draft_body = NULL, "
+                    "decided_at = NULL, sent_at = NULL, channel = ?, message_id = ? WHERE id = ?",
+                    (channel, message_id, existing["id"]),
+                )
+                return existing["id"]
+            return None  # already seen and resolved this exact post
+
+        cur = conn.execute(
+            "INSERT INTO jobs (channel, message_id, content_hash, raw_text, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (channel, message_id, chash, raw_text, time.time()),
+        )
+        return cur.lastrowid
 
 
 def update_job(job_id: int, **fields):
@@ -192,3 +207,12 @@ def set_meta(key: str, value: str):
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+
+
+def get_channel_last_checked(identifier: str) -> float | None:
+    value = get_meta(f"last_checked:{identifier}")
+    return float(value) if value else None
+
+
+def set_channel_last_checked(identifier: str, timestamp: float):
+    set_meta(f"last_checked:{identifier}", str(timestamp))

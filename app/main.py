@@ -42,6 +42,8 @@ async def main():
 
     app = bot_mod.build_application()
     app.bot_data["telethon_client"] = client
+    refresh_event = asyncio.Event()
+    app.bot_data["refresh_event"] = refresh_event
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
@@ -53,13 +55,10 @@ async def main():
     async def on_pending(job_id: int):
         await bot_mod.send_approval_card(app, job_id)
 
-    if settings.backfill_days > 0:
-        logger.info("Running startup backfill for the last %d day(s)", settings.backfill_days)
-        await listener.run_backfill(client, settings.backfill_days, on_pending)
-        logger.info("Startup backfill complete")
-
     try:
-        await listener.run_listener(client, on_pending)
+        await listener.run_poll_loop(
+            client, on_pending, settings.poll_interval_seconds, refresh_event, settings.backfill_days
+        )
     finally:
         scheduler.shutdown()
         await app.updater.stop()

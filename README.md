@@ -160,16 +160,30 @@ too, via `deploy/oracle_vm_setup.sh` / `deploy/gcp_vm_setup.sh`.
 - `/setprofile` -- fill in / update your candidate profile
 - `/channels` -- list, add, or remove watched channels (`/channels add
   <username> [label]`, `/channels remove <username>`)
-- `/backfill [days]` -- screen recent history from watched channels
-  (default 10 days). Useful right after first setup, or after adding a
-  new channel. Safe to run repeatedly -- already-seen posts are skipped.
+- `/refresh` -- check all watched channels right now, instead of waiting
+  for the next scheduled check
+- `/backfill [days]` -- screen a deeper slice of history from watched
+  channels (default 10 days), regardless of each channel's normal
+  check-in point. Useful after adding a new channel. Safe to run
+  repeatedly -- already-seen posts are skipped.
 - `/report` -- on-demand summary of today's activity
 - `/cancel` -- abort an in-progress `/setprofile` conversation
 
-By default the engine only screens messages posted *after* it starts. To
-also pull in recent history: run `/backfill 10` any time in the bot chat,
-or set `BACKFILL_DAYS=10` in `.env` to have it run automatically on every
-startup (the dedup makes this safe to leave on permanently).
+### How watching works
+
+Channels are checked on a timer (`POLL_INTERVAL_SECONDS` in `.env`,
+default 30 min), not via a live/instant stream -- each check only looks
+at messages newer than that channel's last check, not a fixed lookback
+window every time, so nothing in between gets missed or reprocessed. Use
+`/refresh` any time you don't want to wait for the timer. A channel's
+very first-ever check seeds its starting point `BACKFILL_DAYS` back (0 =
+only messages from that point forward); after that, every check picks up
+exactly where the last one left off. None of this depends on Telegram's
+read/unread state -- it's purely about message timestamps.
+
+A post that previously failed to process (e.g. a transient API error) is
+automatically retried on its next check or backfill, rather than being
+treated as a permanent duplicate.
 
 ## Notes / known limitations of this MVP
 

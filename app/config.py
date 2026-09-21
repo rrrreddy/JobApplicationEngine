@@ -36,6 +36,7 @@ class Settings:
     send_cooldown_seconds: int = int(os.getenv("SEND_COOLDOWN_SECONDS", "90") or 90)
     daily_report_time: str = os.getenv("DAILY_REPORT_TIME", "21:00")
     backfill_days: int = int(os.getenv("BACKFILL_DAYS", "0") or 0)
+    poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "1800") or 1800)
 
     def validate(self) -> list[str]:
         """Returns a list of human-readable problems, empty if all required config is set."""

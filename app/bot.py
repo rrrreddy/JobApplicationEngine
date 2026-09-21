@@ -60,6 +60,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Commands:\n"
             "/setprofile - edit your profile\n"
             "/channels - manage watched channels\n"
+            f"/refresh - check watched channels right now (otherwise runs every "
+            f"{settings.poll_interval_seconds // 60} min)\n"
             "/backfill [days] - screen recent history from watched channels (default 10 days)\n"
             "/report - today's summary\n\n"
             "You can also paste any job post text directly into this chat "
@@ -143,6 +145,20 @@ async def cmd_backfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _backfill_running = False
 
     await update.message.reply_text("Backfill complete. Run /report for a summary.")
+
+
+async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+    refresh_event = context.application.bot_data.get("refresh_event")
+    if refresh_event is None:
+        await update.message.reply_text("Not ready yet, try again in a moment.")
+        return
+    refresh_event.set()
+    await update.message.reply_text(
+        "Triggered an immediate check of all watched channels (normally runs every "
+        f"{settings.poll_interval_seconds // 60} min)."
+    )
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -323,6 +339,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("channels", cmd_channels))
     app.add_handler(CommandHandler("backfill", cmd_backfill))
+    app.add_handler(CommandHandler("refresh", cmd_refresh))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(build_setprofile_conversation())
     app.add_handler(CallbackQueryHandler(on_callback))
