@@ -119,31 +119,32 @@ spin up per-request), so it needs a real always-on machine, not a
 serverless/PaaS free tier -- most of those either sleep on idle or no
 longer offer a free always-on worker.
 
-**Recommended: Oracle Cloud "Always Free" tier.** Genuinely free forever
-(not a trial), generous enough (even the smallest free shape is plenty
-for this), reachable 24/7 without your own hardware. Sign up at
-https://www.oracle.com/cloud/free/, create a compute instance (an
-"Always Free" Ampere A1 or AMD shape, Ubuntu image), then either:
+**Using: Google Cloud's `e2-micro` Always Free instance.** Genuinely free
+forever (not a trial) as long as it stays an `e2-micro` in `us-west1`,
+`us-central1`, or `us-east1`. Full step-by-step walkthrough (console
+clicks + equivalent `gcloud` commands, swapfile setup since it only has
+1GB RAM, staying inside the free limits) is in
+[`deploy/gcp-setup.md`](deploy/gcp-setup.md).
 
-- **Docker** (simplest): install Docker on the instance, `git clone` this
-  repo, `cp .env.example .env` and fill it in, put your resume at
-  `data/resume.pdf`, then:
-  ```bash
-  docker compose run --rm job-engine   # first run: interactive Telethon login (phone code)
-  docker compose up -d                 # then run continuously in the background
-  ```
-- **systemd** (no Docker): set up a venv and install `requirements.txt`,
-  run `python -m app.main` once manually to complete the Telethon login,
-  then install `deploy/job-engine.service` as a systemd service so it
-  restarts automatically and survives reboots (see comments in that file
-  for the exact commands).
+Short version, once the VM exists and you've SSH'd in:
 
-Alternatives if you'd rather not use Oracle:
-- **Google Cloud's `e2-micro`** Always Free instance (specific US regions)
-  -- same idea, smaller.
-- **Self-host on a machine you already leave on** (old laptop, Raspberry
-  Pi, home server) -- zero cloud account needed, same Docker/systemd
-  instructions apply locally.
+```bash
+git clone <your repo url> && cd JobApplicationEngine
+chmod +x deploy/gcp_vm_setup.sh && ./deploy/gcp_vm_setup.sh   # installs Docker + adds swap
+cp .env.example .env && nano .env    # fill in credentials
+mkdir -p data                        # put your resume at data/resume.pdf
+docker compose run --rm job-engine   # first run only: interactive Telethon phone-code login
+docker compose up -d                 # then runs continuously in the background
+```
+
+Other options, if you ever move off GCP:
+- **Oracle Cloud "Always Free"** -- also permanently free, larger free
+  shapes available (up to 4 ARM OCPUs/24GB RAM).
+- **systemd, no Docker** -- set up a venv, install `requirements.txt`, run
+  `python -m app.main` once manually for the Telethon login, then install
+  `deploy/job-engine.service` (see comments in that file).
+- **Self-host on a machine you already leave on** -- same Docker/systemd
+  instructions apply locally, zero cloud account needed.
 
 ## Commands
 
