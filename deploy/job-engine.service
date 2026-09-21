@@ -1,0 +1,31 @@
+# Example systemd unit for running the engine continuously on a VM
+# (e.g. Oracle Cloud / Google Cloud Always-Free instance) without Docker.
+#
+# Install:
+#   sudo cp deploy/job-engine.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now job-engine
+#
+# Logs: journalctl -u job-engine -f
+#
+# Adjust User, WorkingDirectory and the venv path below to match your setup.
+# Run `python -m app.main` manually once first (outside systemd) to complete
+# the interactive Telethon phone-code login -- systemd services have no
+# terminal, so first login can't happen there.
+
+[Unit]
+Description=Auto Job Application Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/JobApplicationEngine
+EnvironmentFile=/home/ubuntu/JobApplicationEngine/.env
+ExecStart=/home/ubuntu/JobApplicationEngine/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

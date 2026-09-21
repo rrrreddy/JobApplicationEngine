@@ -112,6 +112,39 @@ identical filter -> fit-judgment -> draft -> approval pipeline as channel
 posts. This is the current, ToS-safe way to include LinkedIn posts: no
 automated scraping of your account.
 
+## Hosting it continuously, for free
+
+This is a persistent background process (it needs to stay running, not
+spin up per-request), so it needs a real always-on machine, not a
+serverless/PaaS free tier -- most of those either sleep on idle or no
+longer offer a free always-on worker.
+
+**Recommended: Oracle Cloud "Always Free" tier.** Genuinely free forever
+(not a trial), generous enough (even the smallest free shape is plenty
+for this), reachable 24/7 without your own hardware. Sign up at
+https://www.oracle.com/cloud/free/, create a compute instance (an
+"Always Free" Ampere A1 or AMD shape, Ubuntu image), then either:
+
+- **Docker** (simplest): install Docker on the instance, `git clone` this
+  repo, `cp .env.example .env` and fill it in, put your resume at
+  `data/resume.pdf`, then:
+  ```bash
+  docker compose run --rm job-engine   # first run: interactive Telethon login (phone code)
+  docker compose up -d                 # then run continuously in the background
+  ```
+- **systemd** (no Docker): set up a venv and install `requirements.txt`,
+  run `python -m app.main` once manually to complete the Telethon login,
+  then install `deploy/job-engine.service` as a systemd service so it
+  restarts automatically and survives reboots (see comments in that file
+  for the exact commands).
+
+Alternatives if you'd rather not use Oracle:
+- **Google Cloud's `e2-micro`** Always Free instance (specific US regions)
+  -- same idea, smaller.
+- **Self-host on a machine you already leave on** (old laptop, Raspberry
+  Pi, home server) -- zero cloud account needed, same Docker/systemd
+  instructions apply locally.
+
 ## Commands
 
 - `/start` -- status + help

@@ -1,0 +1,13 @@
+services:
+  job-engine:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    # Telethon's first-run login needs an interactive terminal to enter the
+    # phone code. Run once with `docker compose run --rm job-engine` to log
+    # in (creates data/job_watcher.session), then use `docker compose up -d`
+    # for normal continuous operation.
+    stdin_open: true
+    tty: true
