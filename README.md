@@ -119,27 +119,28 @@ spin up per-request), so it needs a real always-on machine, not a
 serverless/PaaS free tier -- most of those either sleep on idle or no
 longer offer a free always-on worker.
 
-**Using: Google Cloud's `e2-micro` Always Free instance.** Genuinely free
-forever (not a trial) as long as it stays an `e2-micro` in `us-west1`,
-`us-central1`, or `us-east1`. Full step-by-step walkthrough (console
-clicks + equivalent `gcloud` commands, swapfile setup since it only has
-1GB RAM, staying inside the free limits) is in
-[`deploy/gcp-setup.md`](deploy/gcp-setup.md).
+**Using: Oracle Cloud's "Always Free" tier.** Genuinely free forever (not
+a trial), and more generous than the alternatives -- up to 4 Ampere ARM
+OCPUs / 24GB RAM, or 2 AMD Micro instances (1GB RAM each) as a fallback
+shape. Full step-by-step walkthrough (account signup, instance creation,
+SSH key handling, capacity-error workarounds, staying inside the free
+limits) is in [`deploy/oracle-setup.md`](deploy/oracle-setup.md).
 
 Short version, once the VM exists and you've SSH'd in:
 
 ```bash
 git clone <your repo url> && cd JobApplicationEngine
-chmod +x deploy/gcp_vm_setup.sh && ./deploy/gcp_vm_setup.sh   # installs Docker + adds swap
+chmod +x deploy/oracle_vm_setup.sh && ./deploy/oracle_vm_setup.sh   # installs Docker (+ swap if low-RAM shape)
 cp .env.example .env && nano .env    # fill in credentials
 mkdir -p data                        # put your resume at data/resume.pdf
 docker compose run --rm job-engine   # first run only: interactive Telethon phone-code login
 docker compose up -d                 # then runs continuously in the background
 ```
 
-Other options, if you ever move off GCP:
-- **Oracle Cloud "Always Free"** -- also permanently free, larger free
-  shapes available (up to 4 ARM OCPUs/24GB RAM).
+Other options:
+- **Google Cloud's `e2-micro`** Always Free instance -- also permanently
+  free, smaller (1GB RAM), restricted to 3 US regions. See
+  [`deploy/gcp-setup.md`](deploy/gcp-setup.md) if you'd rather use this.
 - **systemd, no Docker** -- set up a venv, install `requirements.txt`, run
   `python -m app.main` once manually for the Telethon login, then install
   `deploy/job-engine.service` (see comments in that file).
