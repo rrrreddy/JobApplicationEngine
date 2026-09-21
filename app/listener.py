@@ -23,7 +23,7 @@ import logging
 
 from telethon import TelegramClient
 
-from app import db
+from app import db, pipeline
 from app.config import settings
 from app.workqueue import JobQueue
 
@@ -118,7 +118,9 @@ async def run_backfill(client: TelegramClient, days: int, queue: JobQueue):
 
         logger.info("Backfilling %d message(s) from %s (last %d day(s))", len(messages), channel_label, days)
         for message in reversed(messages):  # oldest first, matches how they'd have arrived live
-            await queue.put(channel_label, message.id, message.raw_text)
+            job_id = pipeline.enqueue_discovery(channel_label, message.id, message.raw_text)
+            if job_id is not None:
+                await queue.put(job_id)
 
 
 async def _check_channel_once(client: TelegramClient, identifier: str, entity, queue: JobQueue, seed_days: int):
@@ -143,7 +145,9 @@ async def _check_channel_once(client: TelegramClient, identifier: str, entity, q
     if messages:
         logger.info("Found %d new message(s) in %s since last check", len(messages), channel_label)
     for message in reversed(messages):  # oldest first
-        await queue.put(channel_label, message.id, message.raw_text)
+        job_id = pipeline.enqueue_discovery(channel_label, message.id, message.raw_text)
+        if job_id is not None:
+            await queue.put(job_id)
 
     db.set_channel_last_checked(identifier, now.timestamp())
 

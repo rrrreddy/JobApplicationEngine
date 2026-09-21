@@ -68,12 +68,26 @@ Add the channel usernames (no `@`) or invite links you want watched, comma
 separated, to `TELEGRAM_JOB_CHANNELS` in `.env`. You must already be a
 member of each one.
 
-### 5. LLM (Groq, open-weight model, free tier available)
+### 5. LLM (Groq, open-weight models, free tier available)
 
 1. Go to https://console.groq.com/keys, sign up, create an API key.
-2. Copy it into `.env` as `GROQ_API_KEY`. The default model
-   (`llama-3.3-70b-versatile`) works well for this; change `GROQ_MODEL` if
-   you want a different open-weight model Groq hosts.
+2. Copy it into `.env` as `GROQ_API_KEY`. Groq's model lineup (and which
+   models your key can actually access) changes over time and varies by
+   account -- if fit-judgment/drafting starts failing with a 404
+   "model_not_found", list what your key actually has access to:
+   ```bash
+   docker compose exec job-engine python -c "
+   import os
+   from groq import Groq
+   client = Groq(api_key=os.environ['GROQ_API_KEY'])
+   for m in client.models.list().data: print(m.id)
+   "
+   ```
+3. `GROQ_MODELS` in `.env` is a comma-separated rotation, not a single
+   model. Groq's free-tier daily token limit is scoped *per model*, so on
+   a 429 rate limit the app automatically falls over to the next model in
+   the list -- rotating across 2-3 chat-capable models effectively
+   multiplies your daily budget instead of hard-stopping for the day.
 
 ### 6. Email sending (Gmail example)
 

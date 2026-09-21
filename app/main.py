@@ -63,6 +63,16 @@ async def main():
     app.bot_data["job_queue"] = queue
     worker_task = asyncio.create_task(queue.run_worker())
 
+    # Recover anything discovered-but-not-processed from a previous run
+    # (e.g. the app restarted while these were still sitting in the
+    # in-memory queue, or mid rate-limit backoff) -- they're already
+    # durably in the database at status='queued', just re-enqueue them.
+    stuck_job_ids = db.get_job_ids_by_status("queued")
+    if stuck_job_ids:
+        logger.info("Recovering %d job(s) left over from a previous run", len(stuck_job_ids))
+        for job_id in stuck_job_ids:
+            await queue.put(job_id)
+
     try:
         await listener.run_poll_loop(
             client, queue, settings.poll_interval_seconds, refresh_event, settings.backfill_days

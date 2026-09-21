@@ -4,17 +4,34 @@ Uses JSON Schema structured outputs (response_format: json_schema, strict
 mode) rather than the plain json_object mode -- some Groq models (gpt-oss
 in particular) have documented validation failures with json_object, and
 strict json_schema mode guarantees a schema-conforming response.
+
+Groq's free-tier rate limits (tokens-per-day in particular) are scoped
+per model, not per account -- so settings.groq_models is tried in order,
+falling over to the next model on a 429 instead of just failing. If every
+model in the rotation is currently rate-limited, AllModelsRateLimited is
+raised with the shortest known retry-after so the caller can back off
+sensibly instead of hammering the API.
 """
 import json
 import logging
+import re
 
-from groq import Groq
+from groq import Groq, RateLimitError
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 _client: Groq | None = None
+
+_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s")
+_DEFAULT_RETRY_AFTER = 120.0
+
+
+class AllModelsRateLimited(Exception):
+    def __init__(self, retry_after_seconds: float = _DEFAULT_RETRY_AFTER):
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"All Groq models rate-limited, retry after {retry_after_seconds:.0f}s")
 
 
 def _get_client() -> Groq:
@@ -24,29 +41,58 @@ def _get_client() -> Groq:
     return _client
 
 
-def _chat_json(system: str, user: str, schema_name: str, schema: dict) -> dict:
-    resp = _get_client().chat.completions.create(
-        model=settings.groq_model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.2,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": schema_name,
-                "strict": True,
-                "schema": schema,
-            },
-        },
-    )
-    content = resp.choices[0].message.content
+def _extract_retry_after(exc: RateLimitError) -> float:
     try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        logger.error("LLM returned non-JSON content: %r", content)
-        raise
+        header = exc.response.headers.get("retry-after")
+        if header:
+            return float(header)
+    except Exception:
+        pass
+    match = _RETRY_AFTER_RE.search(str(exc))
+    if match:
+        minutes = float(match.group(1) or 0)
+        seconds = float(match.group(2) or 0)
+        return minutes * 60 + seconds
+    return _DEFAULT_RETRY_AFTER
+
+
+def _chat_json(system: str, user: str, schema_name: str, schema: dict) -> dict:
+    shortest_retry_after = None
+    for model in settings.groq_models:
+        try:
+            resp = _get_client().chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
+            )
+        except RateLimitError as e:
+            retry_after = _extract_retry_after(e)
+            logger.warning(
+                "Model %s rate-limited (retry after %.0fs), trying next fallback if any", model, retry_after
+            )
+            if shortest_retry_after is None or retry_after < shortest_retry_after:
+                shortest_retry_after = retry_after
+            continue
+
+        content = resp.choices[0].message.content
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            logger.error("LLM returned non-JSON content from %s: %r", model, content)
+            raise
+
+    raise AllModelsRateLimited(shortest_retry_after or _DEFAULT_RETRY_AFTER)
 
 
 FIT_SYSTEM_PROMPT = """You are a strict job-fit screener for one specific candidate.

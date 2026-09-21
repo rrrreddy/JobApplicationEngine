@@ -341,7 +341,10 @@ async def on_forwarded_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # too short to be a job post, ignore quietly
 
     await update.message.reply_text("Screening that post...")
-    result = pipeline.process_post("manual-forward", None, text)
+    loop = asyncio.get_running_loop()
+    # Off the event loop: process_post makes real LLM calls that would
+    # otherwise freeze the whole bot while they're in flight.
+    result = await loop.run_in_executor(None, pipeline.process_post, "manual-forward", None, text)
 
     if result.status == "pending":
         await send_approval_card(context.application, result.job_id)
@@ -355,6 +358,11 @@ async def on_forwarded_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Looks like a fit, but I couldn't find a contact email in the text.")
     elif result.status == "already_applied":
         await update.message.reply_text(f"Skipped: {result.detail}")
+    elif result.status == "rate_limited":
+        wait_min = (result.retry_after or 120) / 60
+        await update.message.reply_text(
+            f"All Groq models are rate-limited right now, try again in ~{wait_min:.0f} min."
+        )
     else:
         await update.message.reply_text(f"Couldn't process that post ({result.status}).")
 

@@ -13,6 +13,21 @@ def _split_channels(raw: str) -> list[str]:
     return [c.strip() for c in raw.split(",") if c.strip()]
 
 
+def _default_groq_models() -> list[str]:
+    """GROQ_MODELS (comma-separated) takes priority if set -- these are
+    tried in order, falling over to the next on a per-model rate limit
+    (Groq's free-tier daily token limit is scoped per model, so rotating
+    across a few multiplies the effective daily budget). Falls back to a
+    single GROQ_MODEL if only that's set, then to a built-in rotation."""
+    multi = os.getenv("GROQ_MODELS", "").strip()
+    if multi:
+        return [m.strip() for m in multi.split(",") if m.strip()]
+    single = os.getenv("GROQ_MODEL", "").strip()
+    if single:
+        return [single]
+    return ["openai/gpt-oss-20b", "qwen/qwen3.8-27b", "allam-2-7b"]
+
+
 @dataclass
 class Settings:
     telegram_api_id: int = int(os.getenv("TELEGRAM_API_ID", "0") or 0)
@@ -24,7 +39,7 @@ class Settings:
     )
 
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+    groq_models: list[str] = field(default_factory=_default_groq_models)
 
     smtp_host: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port: int = int(os.getenv("SMTP_PORT", "587") or 587)

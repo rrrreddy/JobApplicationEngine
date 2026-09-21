@@ -6,11 +6,12 @@ from app import db
 STATUS_LABELS = {
     "sent": "Applied",
     "pending": "Awaiting your review",
+    "queued": "Waiting to be screened",
     "rejected": "You skipped",
     "not_a_fit": "Screened out (not a fit)",
     "no_contact": "Fit, but no contact email found",
     "already_applied": "Skipped (already applied to this exact opening)",
-    "failed": "Failed to process (will auto-retry next check/backfill)",
+    "failed": "Failed to process (retry via /backfill)",
     "approved": "Approved (send in progress)",
 }
 
@@ -108,7 +109,7 @@ def build_detailed_report_text() -> list[str]:
             lines.append(f"...+{len(not_fit) - 30} more")
     sections.append("\n\n".join(lines))
 
-    other_statuses = ["no_contact", "already_applied", "failed", "approved"]
+    other_statuses = ["queued", "no_contact", "already_applied", "failed", "approved"]
     for status in other_statuses:
         matching = [j for j in jobs if j["status"] == status]
         if not matching:

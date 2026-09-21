@@ -33,8 +33,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     job_signature TEXT,  -- short "<role> at <company>" identifier, used to dedup per-opening
     draft_subject TEXT,
     draft_body TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-        -- pending | rejected | approved | sent | failed | not_a_fit | no_contact | already_applied
+    status TEXT NOT NULL DEFAULT 'queued',
+        -- queued (discovered, not yet judged) | pending (judged as a fit, awaiting your
+        -- approval) | rejected | approved | sent | failed | not_a_fit | no_contact | already_applied
     approval_chat_message_id INTEGER,
     created_at REAL NOT NULL,
     decided_at REAL,
@@ -167,7 +168,7 @@ def create_job(channel: str, message_id: int, raw_text: str) -> int | None:
         if existing is not None:
             if existing["status"] == "failed":
                 conn.execute(
-                    "UPDATE jobs SET status = 'pending', is_fit = NULL, fit_reason = NULL, "
+                    "UPDATE jobs SET status = 'queued', is_fit = NULL, fit_reason = NULL, "
                     "recruiter_email = NULL, job_signature = NULL, draft_subject = NULL, "
                     "draft_body = NULL, decided_at = NULL, sent_at = NULL, channel = ?, "
                     "message_id = ? WHERE id = ?",
@@ -196,6 +197,15 @@ def update_job(job_id: int, **fields):
 def get_job(job_id: int) -> sqlite3.Row | None:
     with get_conn() as conn:
         return conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+
+def get_job_ids_by_status(status: str) -> list[int]:
+    """Used for crash recovery: finds jobs that were discovered and
+    persisted (status='queued') but never got processed, e.g. because the
+    app restarted while they were still sitting in the in-memory queue."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id FROM jobs WHERE status = ?", (status,)).fetchall()
+        return [r["id"] for r in rows]
 
 
 def mark_applied(email: str, job_signature: str, job_id: int):
