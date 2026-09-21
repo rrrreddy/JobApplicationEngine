@@ -17,7 +17,7 @@ from telegram.ext import (
     filters as tg_filters,
 )
 
-from app import db, mailer, pipeline
+from app import db, listener, mailer, pipeline
 from app import profile as profile_mod
 from app.config import settings
 from app.report import build_report_text
@@ -60,6 +60,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Commands:\n"
             "/setprofile - edit your profile\n"
             "/channels - manage watched channels\n"
+            "/backfill [days] - screen recent history from watched channels (default 10 days)\n"
             "/report - today's summary\n\n"
             "You can also paste any job post text directly into this chat "
             "(e.g. a LinkedIn post you're forwarding manually) and I'll screen it the same way."
@@ -99,6 +100,49 @@ async def cmd_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Removed {rest[0]}.")
     else:
         await update.message.reply_text("Usage: /channels [add <id> [label] | remove <id>]")
+
+
+_backfill_running = False
+
+
+async def cmd_backfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _guard(update):
+        return
+
+    global _backfill_running
+    if _backfill_running:
+        await update.message.reply_text("A backfill is already running, hang tight.")
+        return
+
+    days = 10
+    if context.args:
+        try:
+            days = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Usage: /backfill [days] (default 10)")
+            return
+
+    client = context.application.bot_data.get("telethon_client")
+    if client is None:
+        await update.message.reply_text("Telethon client isn't ready yet, try again in a moment.")
+        return
+
+    await update.message.reply_text(
+        f"Backfilling the last {days} day(s) across watched channels. "
+        f"Already-seen posts are skipped automatically -- this won't double-apply to anything. "
+        f"This can take a while on busy channels."
+    )
+
+    async def on_pending(job_id: int):
+        await send_approval_card(context.application, job_id)
+
+    _backfill_running = True
+    try:
+        await listener.run_backfill(client, days, on_pending)
+    finally:
+        _backfill_running = False
+
+    await update.message.reply_text("Backfill complete. Run /report for a summary.")
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -278,6 +322,7 @@ def build_application() -> Application:
     app = Application.builder().token(settings.telegram_bot_token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("channels", cmd_channels))
+    app.add_handler(CommandHandler("backfill", cmd_backfill))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(build_setprofile_conversation())
     app.add_handler(CallbackQueryHandler(on_callback))

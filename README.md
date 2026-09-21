@@ -160,8 +160,16 @@ too, via `deploy/oracle_vm_setup.sh` / `deploy/gcp_vm_setup.sh`.
 - `/setprofile` -- fill in / update your candidate profile
 - `/channels` -- list, add, or remove watched channels (`/channels add
   <username> [label]`, `/channels remove <username>`)
+- `/backfill [days]` -- screen recent history from watched channels
+  (default 10 days). Useful right after first setup, or after adding a
+  new channel. Safe to run repeatedly -- already-seen posts are skipped.
 - `/report` -- on-demand summary of today's activity
 - `/cancel` -- abort an in-progress `/setprofile` conversation
+
+By default the engine only screens messages posted *after* it starts. To
+also pull in recent history: run `/backfill 10` any time in the bot chat,
+or set `BACKFILL_DAYS=10` in `.env` to have it run automatically on every
+startup (the dedup makes this safe to leave on permanently).
 
 ## Notes / known limitations of this MVP
 
