@@ -30,20 +30,27 @@ CREATE TABLE IF NOT EXISTS jobs (
     is_fit INTEGER,
     fit_reason TEXT,
     recruiter_email TEXT,
+    job_signature TEXT,  -- short "<role> at <company>" identifier, used to dedup per-opening
     draft_subject TEXT,
     draft_body TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
-        -- pending | rejected | approved | sent | failed | not_a_fit | no_contact | duplicate_recruiter
+        -- pending | rejected | approved | sent | failed | not_a_fit | no_contact | already_applied
     approval_chat_message_id INTEGER,
     created_at REAL NOT NULL,
     decided_at REAL,
     sent_at REAL
 );
 
-CREATE TABLE IF NOT EXISTS recruiters (
-    email TEXT PRIMARY KEY,
-    first_contacted_at REAL NOT NULL,
-    job_id INTEGER NOT NULL
+-- One row per (recruiter, specific opening) actually emailed. Reposts of
+-- the same opening are blocked; a genuinely different opening from the
+-- same recruiter/company is not.
+CREATE TABLE IF NOT EXISTS sent_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recruiter_email TEXT NOT NULL,
+    job_signature TEXT NOT NULL,
+    job_id INTEGER NOT NULL,
+    sent_at REAL NOT NULL,
+    UNIQUE(recruiter_email, job_signature)
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -133,11 +140,17 @@ def job_exists(chash: str) -> bool:
         return row is not None
 
 
-def recruiter_already_contacted(email: str) -> bool:
-    if not email:
+def already_applied(email: str, job_signature: str) -> bool:
+    """True if we've already sent this exact recruiter an application for
+    this exact opening. A different opening from the same recruiter/company
+    is allowed through."""
+    if not email or not job_signature:
         return False
     with get_conn() as conn:
-        row = conn.execute("SELECT 1 FROM recruiters WHERE email = ?", (email.lower(),)).fetchone()
+        row = conn.execute(
+            "SELECT 1 FROM sent_applications WHERE recruiter_email = ? AND job_signature = ?",
+            (email.strip().lower(), job_signature.strip().lower()),
+        ).fetchone()
         return row is not None
 
 
@@ -155,8 +168,9 @@ def create_job(channel: str, message_id: int, raw_text: str) -> int | None:
             if existing["status"] == "failed":
                 conn.execute(
                     "UPDATE jobs SET status = 'pending', is_fit = NULL, fit_reason = NULL, "
-                    "recruiter_email = NULL, draft_subject = NULL, draft_body = NULL, "
-                    "decided_at = NULL, sent_at = NULL, channel = ?, message_id = ? WHERE id = ?",
+                    "recruiter_email = NULL, job_signature = NULL, draft_subject = NULL, "
+                    "draft_body = NULL, decided_at = NULL, sent_at = NULL, channel = ?, "
+                    "message_id = ? WHERE id = ?",
                     (channel, message_id, existing["id"]),
                 )
                 return existing["id"]
@@ -184,11 +198,12 @@ def get_job(job_id: int) -> sqlite3.Row | None:
         return conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
 
 
-def mark_recruiter_contacted(email: str, job_id: int):
+def mark_applied(email: str, job_signature: str, job_id: int):
     with get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO recruiters (email, first_contacted_at, job_id) VALUES (?, ?, ?)",
-            (email.lower(), time.time(), job_id),
+            "INSERT OR IGNORE INTO sent_applications (recruiter_email, job_signature, job_id, sent_at) "
+            "VALUES (?, ?, ?, ?)",
+            (email.strip().lower(), job_signature.strip().lower(), job_id, time.time()),
         )
 
 

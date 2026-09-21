@@ -51,31 +51,41 @@ def process_post(channel: str, message_id: int | None, raw_text: str) -> Pipelin
         return PipelineResult(job_id, "failed", "LLM drafting call failed")
 
     contact_email = (draft.get("contact_email") or "").strip() or None
+    job_signature = (draft.get("job_signature") or "").strip() or draft.get("subject", "").strip()
+    body = draft.get("body", "").rstrip()
+    signature_block = profile_mod.format_signature(candidate_profile)
+    if signature_block:
+        body = f"{body}\n\n{signature_block}"
 
     if not contact_email:
         db.update_job(
             job_id,
             status="no_contact",
+            job_signature=job_signature,
             draft_subject=draft.get("subject", ""),
-            draft_body=draft.get("body", ""),
+            draft_body=body,
         )
         return PipelineResult(job_id, "no_contact", "fit, but no recruiter email found in the post")
 
-    if db.recruiter_already_contacted(contact_email):
+    if db.already_applied(contact_email, job_signature):
         db.update_job(
             job_id,
-            status="duplicate_recruiter",
+            status="already_applied",
             recruiter_email=contact_email,
+            job_signature=job_signature,
             draft_subject=draft.get("subject", ""),
-            draft_body=draft.get("body", ""),
+            draft_body=body,
         )
-        return PipelineResult(job_id, "duplicate_recruiter", f"already emailed {contact_email} before")
+        return PipelineResult(
+            job_id, "already_applied", f"already applied to {job_signature!r} via {contact_email} before"
+        )
 
     db.update_job(
         job_id,
         status="pending",
         recruiter_email=contact_email,
+        job_signature=job_signature,
         draft_subject=draft.get("subject", ""),
-        draft_body=draft.get("body", ""),
+        draft_body=body,
     )
     return PipelineResult(job_id, "pending", "queued for approval")

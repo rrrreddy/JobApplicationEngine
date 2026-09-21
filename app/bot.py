@@ -21,7 +21,7 @@ from telegram.ext import (
 from app import db, listener, mailer, pipeline
 from app import profile as profile_mod
 from app.config import settings
-from app.report import build_report_text
+from app.report import build_detailed_report_text, build_report_text
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"/refresh - check watched channels right now (otherwise runs every "
             f"{settings.poll_interval_seconds // 60} min)\n"
             "/backfill [days] - screen recent history from watched channels (default 10 days)\n"
-            "/report - today's summary\n\n"
+            "/report - today's summary (/report detailed for a full per-job breakdown)\n\n"
             "You can also paste any job post text directly into this chat "
             "(e.g. a LinkedIn post you're forwarding manually) and I'll screen it the same way."
         )
@@ -126,24 +126,25 @@ async def cmd_backfill(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     client = context.application.bot_data.get("telethon_client")
-    if client is None:
-        await update.message.reply_text("Telethon client isn't ready yet, try again in a moment.")
+    queue = context.application.bot_data.get("job_queue")
+    if client is None or queue is None:
+        await update.message.reply_text("Not ready yet, try again in a moment.")
         return
 
     await update.message.reply_text(
-        f"Backfilling the last {days} day(s) across watched channels. "
+        f"Scanning the last {days} day(s) across watched channels and queueing anything found. "
         f"Already-seen posts are skipped automatically -- this won't double-apply to anything. "
-        f"This can take a while on busy channels."
+        f"Processing happens in the background at a steady pace, so it may take a while for a "
+        f"busy channel to fully work through the queue -- check /report later for progress."
     )
-
-    async def on_pending(job_id: int):
-        await send_approval_card(context.application, job_id)
 
     _backfill_running = True
     try:
-        await listener.run_backfill(client, days, on_pending)
+        await listener.run_backfill(client, days, queue)
     finally:
         _backfill_running = False
+
+    await update.message.reply_text(f"Done scanning. {queue.qsize()} post(s) now queued for processing.")
 
     await update.message.reply_text("Backfill complete. Run /report for a summary.")
 
@@ -165,7 +166,12 @@ async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _guard(update):
         return
-    await update.message.reply_text(build_report_text())
+    detailed = bool(context.args) and context.args[0].lower() in ("detailed", "full")
+    if detailed:
+        for chunk in build_detailed_report_text():
+            await update.message.reply_text(chunk)
+    else:
+        await update.message.reply_text(build_report_text())
 
 
 # ---------- /setprofile conversation ----------
@@ -319,7 +325,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         db.update_job(job_id, status="sent")
-        db.mark_recruiter_contacted(job["recruiter_email"], job_id)
+        db.mark_applied(job["recruiter_email"], job["job_signature"], job_id)
         await query.edit_message_text(
             query.message.text_html + "\n\n<b>Sent.</b>", parse_mode=ParseMode.HTML
         )
@@ -347,7 +353,7 @@ async def on_forwarded_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Not a fit: {result.detail}")
     elif result.status == "no_contact":
         await update.message.reply_text("Looks like a fit, but I couldn't find a contact email in the text.")
-    elif result.status == "duplicate_recruiter":
+    elif result.status == "already_applied":
         await update.message.reply_text(f"Skipped: {result.detail}")
     else:
         await update.message.reply_text(f"Couldn't process that post ({result.status}).")

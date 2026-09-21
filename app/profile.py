@@ -66,3 +66,20 @@ def as_prompt_block(profile: dict) -> str:
     ]
     lines += [f"- {a}" for a in achievements]
     return "\n".join(lines)
+
+
+def format_signature(profile: dict) -> str:
+    """The deterministic email sign-off block: name, email, phone (marked
+    as WhatsApp-reachable). Built from profile data directly rather than
+    trusted to the LLM, so it's never mangled or hallucinated."""
+    lines = []
+    name = (profile.get("full_name") or "").strip()
+    if name:
+        lines.append(name)
+    email = (profile.get("email") or "").strip()
+    if email:
+        lines.append(email)
+    phone = (profile.get("phone") or "").strip()
+    if phone:
+        lines.append(f"{phone} (WhatsApp)")
+    return "\n".join(lines)

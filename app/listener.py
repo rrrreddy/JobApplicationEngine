@@ -1,6 +1,6 @@
-"""Telethon client that periodically checks your job channels and runs
-each new post through the pipeline. Uses your own Telegram account (not a
-bot) so it can read channels/groups you're a member of, admin or not.
+"""Telethon client that periodically checks your job channels and enqueues
+each new post for processing. Uses your own Telegram account (not a bot)
+so it can read channels/groups you're a member of, admin or not.
 
 On first run this will prompt for your phone number + login code in the
 terminal, then save a .session file so you won't be asked again.
@@ -10,22 +10,26 @@ POLL_INTERVAL_SECONDS (default 30 min) it checks each channel for
 messages newer than the last time that channel was checked, independent
 of Telegram's read/unread state. A manual /refresh in the bot wakes the
 loop early via `refresh_event` for an on-demand check.
+
+Discovering new messages (this module) is kept separate from processing
+them (app.workqueue.JobQueue) -- both the poll loop and backfill just
+enqueue what they find, and a single worker processes everything one at
+a time, so there's never more than one thing writing to the database or
+calling Groq/SMTP at once.
 """
 import asyncio
 import datetime as dt
 import logging
-from typing import Awaitable, Callable
 
 from telethon import TelegramClient
 
-from app import db, pipeline
+from app import db
 from app.config import settings
+from app.workqueue import JobQueue
 
 logger = logging.getLogger(__name__)
 
 SESSION_PATH = "data/job_watcher"
-
-OnPending = Callable[[int], Awaitable[None]]
 
 
 def build_client() -> TelegramClient:
@@ -85,25 +89,14 @@ async def resolve_channels(client: TelegramClient, identifiers: list[str]) -> di
     return resolved
 
 
-async def _process_and_notify(channel_label: str, message_id: int, text: str, on_pending: OnPending):
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, pipeline.process_post, channel_label, message_id, text)
-    logger.info("Processed post from %s -> %s (%s)", channel_label, result.status, result.detail)
-    if result.status == "pending" and result.job_id is not None:
-        await on_pending(result.job_id)
-    return result
-
-
-async def run_backfill(client: TelegramClient, days: int, on_pending: OnPending, delay_seconds: float = 1.5):
-    """Fetches and screens messages from the last `days` days in each
-    watched channel, regardless of each channel's poll bookkeeping. Safe
-    to re-run or overlap with the poll loop: the pipeline's content-hash
-    dedup means a message already seen and resolved is skipped
-    automatically, so this never double-processes or double-sends
-    anything (a previously *failed* one is retried, which is intentional).
-
-    `delay_seconds` paces requests between messages to stay well under
-    Telegram's and Groq's rate limits during a large catch-up run.
+async def run_backfill(client: TelegramClient, days: int, queue: JobQueue):
+    """Finds messages from the last `days` days in each watched channel
+    and enqueues them, regardless of each channel's poll bookkeeping.
+    Safe to re-run or overlap with the poll loop: the pipeline's
+    content-hash dedup means a message already seen and resolved is
+    skipped automatically (a previously *failed* one is retried, which is
+    intentional). Enqueueing is fast; the actual pacing happens in the
+    queue's single worker.
     """
     if days <= 0:
         return
@@ -125,14 +118,11 @@ async def run_backfill(client: TelegramClient, days: int, on_pending: OnPending,
 
         logger.info("Backfilling %d message(s) from %s (last %d day(s))", len(messages), channel_label, days)
         for message in reversed(messages):  # oldest first, matches how they'd have arrived live
-            await _process_and_notify(channel_label, message.id, message.raw_text, on_pending)
-            await asyncio.sleep(delay_seconds)
+            await queue.put(channel_label, message.id, message.raw_text)
 
 
-async def _check_channel_once(
-    client: TelegramClient, identifier: str, entity, on_pending: OnPending, seed_days: int
-):
-    """Processes messages newer than this channel's last recorded check.
+async def _check_channel_once(client: TelegramClient, identifier: str, entity, queue: JobQueue, seed_days: int):
+    """Enqueues messages newer than this channel's last recorded check.
     On a channel's very first ever check, seeds the starting point `seed_days`
     back (0 = only messages from this point forward)."""
     last_checked = db.get_channel_last_checked(identifier)
@@ -153,14 +143,14 @@ async def _check_channel_once(
     if messages:
         logger.info("Found %d new message(s) in %s since last check", len(messages), channel_label)
     for message in reversed(messages):  # oldest first
-        await _process_and_notify(channel_label, message.id, message.raw_text, on_pending)
+        await queue.put(channel_label, message.id, message.raw_text)
 
     db.set_channel_last_checked(identifier, now.timestamp())
 
 
 async def run_poll_loop(
     client: TelegramClient,
-    on_pending: OnPending,
+    queue: JobQueue,
     interval_seconds: int,
     refresh_event: asyncio.Event,
     seed_days: int = 0,
@@ -184,7 +174,7 @@ async def run_poll_loop(
     while True:
         for identifier, entity in resolved.items():
             try:
-                await _check_channel_once(client, identifier, entity, on_pending, seed_days)
+                await _check_channel_once(client, identifier, entity, queue, seed_days)
             except Exception:
                 logger.exception("Error checking channel %s", identifier)
 

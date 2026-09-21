@@ -84,28 +84,42 @@ def judge_fit(profile_text: str, post_text: str) -> dict:
 
 DRAFT_SYSTEM_PROMPT = """You extract the recruiter contact and draft a job application email.
 
-You will be given the candidate's profile and a job post. Do two things:
+You will be given the candidate's profile and a job post. Do three things:
 1. contact_email: the best email address to apply to, found in the post text. If none is
    present, set it to null (do not invent one).
-2. subject: a short, specific email subject line referencing the role.
-3. body: a compact, plain-text, human-sounding application email (150-220 words). It must:
-   - open with a concrete line referencing the specific role/company from the post
+2. job_signature: a short 3-8 word identifier for this SPECIFIC opening, e.g.
+   "Senior Data Engineer at Acme Corp" or "Remote Backend Dev, Gulf Region Startup".
+   Used internally to tell this opening apart from other ones -- never shown to the
+   recruiter. Two posts should get the same job_signature only if they're genuinely
+   the same role at the same company; a different role or a different company must
+   get a different signature.
+3. subject: a short, specific email subject line referencing the role.
+4. body: a compact, human-written-sounding application email (130-190 words, plain text).
+   Write like an actual candidate emailing directly, not a template generator:
+   - vary your sentence openers and structure -- do not default to "I am writing to
+     express my interest" or other stock recruiting-email phrases
+   - open with a concrete, specific line referencing the exact role/company from the post
    - mirror the vocabulary/requirements used in the post
-   - map the candidate's real experience and stack to what the post asks for
+   - map the candidate's real experience and stack to what the post asks for, with at
+     least one concrete, specific detail (not generic claims like "great communicator")
    - mention availability / relocation stance using the candidate's stated preference
-   - end with a clear call to action and a sign-off using the candidate's real name,
-     email, and phone
-   - sound like a person wrote it, not a template. No placeholders like [Company Name].
-   - do not mention that you are an AI or that this was auto-generated."""
+   - end with a clear, low-friction call to action (e.g. offering a quick call or to
+     send more details)
+   - do NOT write a sign-off, name, email, or phone number at the end -- the system
+     appends the candidate's real contact block automatically after your text. Just
+     end on the call-to-action sentence.
+   - no placeholders like [Company Name]. no mention that you are an AI or that this
+     was auto-generated."""
 
 DRAFT_SCHEMA = {
     "type": "object",
     "properties": {
         "contact_email": {"type": ["string", "null"]},
+        "job_signature": {"type": "string"},
         "subject": {"type": "string"},
         "body": {"type": "string"},
     },
-    "required": ["contact_email", "subject", "body"],
+    "required": ["contact_email", "job_signature", "subject", "body"],
     "additionalProperties": False,
 }
 
@@ -114,6 +128,7 @@ def draft_application(profile_text: str, post_text: str) -> dict:
     user = f"CANDIDATE PROFILE:\n{profile_text}\n\nPOST:\n{post_text}"
     result = _chat_json(DRAFT_SYSTEM_PROMPT, user, "application_draft", DRAFT_SCHEMA)
     result.setdefault("contact_email", None)
+    result.setdefault("job_signature", "")
     result.setdefault("subject", "")
     result.setdefault("body", "")
     return result

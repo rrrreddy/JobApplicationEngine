@@ -11,6 +11,7 @@ from app import bot as bot_mod
 from app import db, listener
 from app.config import settings
 from app.report import build_report_text
+from app.workqueue import JobQueue
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,11 +56,19 @@ async def main():
     async def on_pending(job_id: int):
         await bot_mod.send_approval_card(app, job_id)
 
+    # Everything discovered (poll loop, backfill) funnels through this one
+    # queue/worker so there's only ever one thing processing at a time --
+    # no more concurrent writers hammering the database or Groq/SMTP.
+    queue = JobQueue(on_pending)
+    app.bot_data["job_queue"] = queue
+    worker_task = asyncio.create_task(queue.run_worker())
+
     try:
         await listener.run_poll_loop(
-            client, on_pending, settings.poll_interval_seconds, refresh_event, settings.backfill_days
+            client, queue, settings.poll_interval_seconds, refresh_event, settings.backfill_days
         )
     finally:
+        worker_task.cancel()
         scheduler.shutdown()
         await app.updater.stop()
         await app.stop()
