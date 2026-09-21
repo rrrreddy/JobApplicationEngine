@@ -112,40 +112,47 @@ identical filter -> fit-judgment -> draft -> approval pipeline as channel
 posts. This is the current, ToS-safe way to include LinkedIn posts: no
 automated scraping of your account.
 
-## Hosting it continuously, for free
+## Hosting it continuously
 
-This is a persistent background process (it needs to stay running, not
-spin up per-request), so it needs a real always-on machine, not a
-serverless/PaaS free tier -- most of those either sleep on idle or no
-longer offer a free always-on worker.
-
-**Using: Oracle Cloud's "Always Free" tier.** Genuinely free forever (not
-a trial), and more generous than the alternatives -- up to 4 Ampere ARM
-OCPUs / 24GB RAM, or 2 AMD Micro instances (1GB RAM each) as a fallback
-shape. Full step-by-step walkthrough (account signup, instance creation,
-SSH key handling, capacity-error workarounds, staying inside the free
-limits) is in [`deploy/oracle-setup.md`](deploy/oracle-setup.md).
-
-Short version, once the VM exists and you've SSH'd in:
+**Using: local Docker, on your own machine.** No cloud account, no card,
+no signup friction -- just Docker running on a computer you leave on and
+connected to the internet. This is a persistent background process (it
+needs to stay running, not spin up per-request), so the machine needs to
+actually stay powered on; see the OS-specific notes below for preventing
+sleep and auto-starting on boot.
 
 ```bash
 git clone <your repo url> && cd JobApplicationEngine
-chmod +x deploy/oracle_vm_setup.sh && ./deploy/oracle_vm_setup.sh   # installs Docker (+ swap if low-RAM shape)
-cp .env.example .env && nano .env    # fill in credentials
+cp .env.example .env && nano .env    # or any editor -- fill in credentials
 mkdir -p data                        # put your resume at data/resume.pdf
 docker compose run --rm job-engine   # first run only: interactive Telethon phone-code login
 docker compose up -d                 # then runs continuously in the background
 ```
 
-Other options:
-- **Google Cloud's `e2-micro`** Always Free instance -- also permanently
-  free, smaller (1GB RAM), restricted to 3 US regions. See
-  [`deploy/gcp-setup.md`](deploy/gcp-setup.md) if you'd rather use this.
-- **systemd, no Docker** -- set up a venv, install `requirements.txt`, run
-  `python -m app.main` once manually for the Telethon login, then install
-  `deploy/job-engine.service` (see comments in that file).
-- **Self-host on a machine you already leave on** -- same Docker/systemd
-  instructions apply locally, zero cloud account needed.
+Check it's alive any time: `docker compose logs -f`.
+
+### Keeping it running continuously
+
+- **Prevent sleep**: laptops/desktops sleeping kills the container's
+  network connections. On macOS: System Settings -> Lock Screen -> set
+  "Turn display off" and disable "Put hard disks/Mac to sleep" (or
+  `sudo pmset -c sleep 0` while it's plugged in). On Windows: Settings ->
+  System -> Power & battery -> set Sleep to Never (while plugged in). On
+  Linux: `sudo systemctl mask sleep.target suspend.target hibernate.target`.
+- **Auto-start on boot**: Docker Desktop (Mac/Windows) has a "Start Docker
+  Desktop when you sign in" option in its settings, and
+  `restart: unless-stopped` in `docker-compose.yml` (already set) means
+  the container itself relaunches automatically whenever Docker restarts.
+  On Linux with plain Docker Engine: `sudo systemctl enable docker`.
+
+### If you ever want it reachable without your machine staying on
+
+The cloud paths are still documented and ready to go if you change your
+mind later: [`deploy/oracle-setup.md`](deploy/oracle-setup.md) (Oracle
+Always Free, most generous but had signup issues) and
+[`deploy/gcp-setup.md`](deploy/gcp-setup.md) (Google Cloud `e2-micro`,
+smaller but simpler signup). Same `docker compose` commands apply there
+too, via `deploy/oracle_vm_setup.sh` / `deploy/gcp_vm_setup.sh`.
 
 ## Commands
 
