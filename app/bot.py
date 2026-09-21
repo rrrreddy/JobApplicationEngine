@@ -3,6 +3,7 @@ manual-forward (e.g. for LinkedIn posts you paste in by hand), and on-demand rep
 
 Only ever talks to TELEGRAM_OWNER_CHAT_ID -- every handler checks the sender.
 """
+import asyncio
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -268,10 +269,22 @@ async def send_approval_card(app: Application, job_id: int):
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query or query.from_user.id != settings.telegram_owner_chat_id:
-        await query.answer()
+    if not query:
         return
-    await query.answer()
+    if query.from_user.id != settings.telegram_owner_chat_id:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        return
+
+    try:
+        await query.answer()
+    except Exception:
+        # Telegram callback queries go stale after ~15-30s (e.g. if the bot
+        # was busy or briefly restarted). The popup ack failing shouldn't
+        # stop us from actually processing the click below.
+        logger.warning("Could not answer callback query %s (likely stale) -- processing the click anyway", query.id)
 
     action, job_id_str = query.data.split(":", 1)
     job_id = int(job_id_str)
@@ -289,8 +302,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "send":
         db.update_job(job_id, status="approved")
+        loop = asyncio.get_running_loop()
         try:
-            mailer.send_application(job["recruiter_email"], job["draft_subject"], job["draft_body"])
+            # Runs off the event loop: send_application blocks on SMTP I/O
+            # and sleeps for the send cooldown (up to SEND_COOLDOWN_SECONDS),
+            # which would otherwise freeze the whole bot while it waits.
+            await loop.run_in_executor(
+                None, mailer.send_application, job["recruiter_email"], job["draft_subject"], job["draft_body"]
+            )
         except Exception:
             logger.exception("send failed for job %s", job_id)
             db.update_job(job_id, status="failed")
@@ -334,6 +353,10 @@ async def on_forwarded_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Couldn't process that post ({result.status}).")
 
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Unhandled exception while processing an update", exc_info=context.error)
+
+
 def build_application() -> Application:
     app = Application.builder().token(settings.telegram_bot_token).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -344,4 +367,5 @@ def build_application() -> Application:
     app.add_handler(build_setprofile_conversation())
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(tg_filters.TEXT & ~tg_filters.COMMAND, on_forwarded_text))
+    app.add_error_handler(on_error)
     return app

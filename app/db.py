@@ -56,9 +56,17 @@ CREATE TABLE IF NOT EXISTS meta (
 @contextmanager
 def get_conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # WAL mode lets readers/writers proceed concurrently instead of blocking
+    # each other -- important here since backfill/poll writes from a
+    # background thread and the bot's handlers on the event loop both hit
+    # this file at once. busy_timeout backstops any remaining brief locks
+    # with a retry instead of the 5s default before raising "database is
+    # locked".
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     try:
         yield conn
         conn.commit()
