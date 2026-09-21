@@ -1,6 +1,9 @@
 """Groq-hosted open-weight model calls: fit judgment + contact extraction + drafting.
 
-Both calls ask the model to return strict JSON so we can parse deterministically.
+Uses JSON Schema structured outputs (response_format: json_schema, strict
+mode) rather than the plain json_object mode -- some Groq models (gpt-oss
+in particular) have documented validation failures with json_object, and
+strict json_schema mode guarantees a schema-conforming response.
 """
 import json
 import logging
@@ -21,7 +24,7 @@ def _get_client() -> Groq:
     return _client
 
 
-def _chat_json(system: str, user: str) -> dict:
+def _chat_json(system: str, user: str, schema_name: str, schema: dict) -> dict:
     resp = _get_client().chat.completions.create(
         model=settings.groq_model,
         messages=[
@@ -29,7 +32,14 @@ def _chat_json(system: str, user: str) -> dict:
             {"role": "user", "content": user},
         ],
         temperature=0.2,
-        response_format={"type": "json_object"},
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+        },
     )
     content = resp.choices[0].message.content
     try:
@@ -48,14 +58,24 @@ be a genuine job vacancy. Decide:
    based on their stack, experience level, target roles, and relocation preference?
 3. reason: one short sentence explaining the decision.
 
-Respond ONLY with a JSON object: {"is_vacancy": bool, "is_fit": bool, "reason": string}.
 If is_vacancy is false, is_fit must also be false.
 Be conservative: when the post is ambiguous or clearly a mismatch, prefer is_fit=false."""
+
+FIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_vacancy": {"type": "boolean"},
+        "is_fit": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["is_vacancy", "is_fit", "reason"],
+    "additionalProperties": False,
+}
 
 
 def judge_fit(profile_text: str, post_text: str) -> dict:
     user = f"CANDIDATE PROFILE:\n{profile_text}\n\nPOST:\n{post_text}"
-    result = _chat_json(FIT_SYSTEM_PROMPT, user)
+    result = _chat_json(FIT_SYSTEM_PROMPT, user, "fit_judgment", FIT_SCHEMA)
     result.setdefault("is_vacancy", False)
     result.setdefault("is_fit", False)
     result.setdefault("reason", "")
@@ -76,15 +96,23 @@ You will be given the candidate's profile and a job post. Do two things:
    - end with a clear call to action and a sign-off using the candidate's real name,
      email, and phone
    - sound like a person wrote it, not a template. No placeholders like [Company Name].
-   - do not mention that you are an AI or that this was auto-generated.
+   - do not mention that you are an AI or that this was auto-generated."""
 
-Respond ONLY with a JSON object:
-{"contact_email": string|null, "subject": string, "body": string}"""
+DRAFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "contact_email": {"type": ["string", "null"]},
+        "subject": {"type": "string"},
+        "body": {"type": "string"},
+    },
+    "required": ["contact_email", "subject", "body"],
+    "additionalProperties": False,
+}
 
 
 def draft_application(profile_text: str, post_text: str) -> dict:
     user = f"CANDIDATE PROFILE:\n{profile_text}\n\nPOST:\n{post_text}"
-    result = _chat_json(DRAFT_SYSTEM_PROMPT, user)
+    result = _chat_json(DRAFT_SYSTEM_PROMPT, user, "application_draft", DRAFT_SCHEMA)
     result.setdefault("contact_email", None)
     result.setdefault("subject", "")
     result.setdefault("body", "")
