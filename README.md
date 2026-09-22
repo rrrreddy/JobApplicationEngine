@@ -161,19 +161,12 @@ Check it's alive any time: `docker compose logs -f`.
 
 ### If you ever want it reachable without your machine staying on
 
-Cloud paths are documented and ready to go:
-- [`deploy/azure-setup.md`](deploy/azure-setup.md) -- if you already
-  have Azure access. Simplest of the three since you can just `scp`
-  your already-authenticated `data/` folder up instead of logging in
-  again.
-- [`deploy/oracle-setup.md`](deploy/oracle-setup.md) -- Oracle Always
-  Free, most generous free allowance but had signup issues.
-- [`deploy/gcp-setup.md`](deploy/gcp-setup.md) -- Google Cloud
-  `e2-micro`, smaller but simpler signup.
-
-Same `docker compose` commands apply on all three, via
-`deploy/azure_vm_setup.sh` / `deploy/oracle_vm_setup.sh` /
-`deploy/gcp_vm_setup.sh`.
+The cloud paths are still documented and ready to go if you change your
+mind later: [`deploy/oracle-setup.md`](deploy/oracle-setup.md) (Oracle
+Always Free, most generous but had signup issues) and
+[`deploy/gcp-setup.md`](deploy/gcp-setup.md) (Google Cloud `e2-micro`,
+smaller but simpler signup). Same `docker compose` commands apply there
+too, via `deploy/oracle_vm_setup.sh` / `deploy/gcp_vm_setup.sh`.
 
 ## Commands
 
